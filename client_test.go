@@ -27,7 +27,7 @@ func sendSuccess(count int) map[string]any {
 	}
 }
 
-func TestSendGeneratesTokenAndSends(t *testing.T) {
+func TestSendOtpGeneratesTokenAndSends(t *testing.T) {
 	tokenCalls, sendCalls := 0, 0
 
 	mux := http.NewServeMux()
@@ -41,7 +41,7 @@ func TestSendGeneratesTokenAndSends(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(tokenSuccess("tok-1"))
 	})
-	mux.HandleFunc(sendPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(otpPath, func(w http.ResponseWriter, r *http.Request) {
 		sendCalls++
 		if r.Header.Get("integration_token") != "tok-1" {
 			t.Errorf("integration_token header = %q, want tok-1", r.Header.Get("integration_token"))
@@ -67,7 +67,7 @@ func TestSendGeneratesTokenAndSends(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{BaseURL: server.URL, Username: "corpuser", Password: "secret", SenderID: "Evo App"}, server.Client())
-	result, err := client.SendSingle("+962 79 0000001", "Your code is 1234")
+	result, err := client.SendOtp("+962 79 0000001", "Your code is 1234")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +79,31 @@ func TestSendGeneratesTokenAndSends(t *testing.T) {
 	}
 }
 
-func TestSendReusesCachedToken(t *testing.T) {
+func TestSendUsesGeneralEndpoint(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(tokenPath, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(tokenSuccess("tok-1"))
+	})
+	mux.HandleFunc(sendPath, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(sendSuccess(2))
+	})
+	mux.HandleFunc(otpPath, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("general Send must not hit the sendOTP endpoint")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, Username: "u", Password: "p", SenderID: "s"}, server.Client())
+	result, err := client.Send([]string{"962790000001", "962790000002"}, "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TotalMessages != 2 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestSendOtpReusesCachedToken(t *testing.T) {
 	tokenCalls := 0
 
 	mux := http.NewServeMux()
@@ -87,7 +111,7 @@ func TestSendReusesCachedToken(t *testing.T) {
 		tokenCalls++
 		json.NewEncoder(w).Encode(tokenSuccess("tok-1"))
 	})
-	mux.HandleFunc(sendPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(otpPath, func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(sendSuccess(1))
 	})
 	server := httptest.NewServer(mux)
@@ -95,7 +119,7 @@ func TestSendReusesCachedToken(t *testing.T) {
 
 	client := NewClient(Config{BaseURL: server.URL, Username: "u", Password: "p", SenderID: "s"}, server.Client())
 	for i := 0; i < 3; i++ {
-		if _, err := client.SendSingle("962790000001", "hi"); err != nil {
+		if _, err := client.SendOtp("962790000001", "hi"); err != nil {
 			t.Fatalf("send %d failed: %v", i, err)
 		}
 	}
@@ -104,7 +128,7 @@ func TestSendReusesCachedToken(t *testing.T) {
 	}
 }
 
-func TestSendRefreshesTokenOnInvalidAuth(t *testing.T) {
+func TestSendOtpRefreshesTokenOnInvalidAuth(t *testing.T) {
 	tokenCalls, sendCalls := 0, 0
 
 	mux := http.NewServeMux()
@@ -116,7 +140,7 @@ func TestSendRefreshesTokenOnInvalidAuth(t *testing.T) {
 			json.NewEncoder(w).Encode(tokenSuccess("tok-fresh"))
 		}
 	})
-	mux.HandleFunc(sendPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(otpPath, func(w http.ResponseWriter, r *http.Request) {
 		sendCalls++
 		if r.Header.Get("integration_token") != "tok-fresh" {
 			json.NewEncoder(w).Encode(map[string]any{"status": "invalid authentication!", "result": map[string]any{}})
@@ -128,7 +152,7 @@ func TestSendRefreshesTokenOnInvalidAuth(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{BaseURL: server.URL, Username: "u", Password: "p", SenderID: "s"}, server.Client())
-	result, err := client.SendSingle("962790000001", "hi")
+	result, err := client.SendOtp("962790000001", "hi")
 	if err != nil {
 		t.Fatalf("expected refresh-and-retry to succeed, got: %v", err)
 	}
@@ -140,19 +164,19 @@ func TestSendRefreshesTokenOnInvalidAuth(t *testing.T) {
 	}
 }
 
-func TestSendReportsRejection(t *testing.T) {
+func TestSendOtpReportsRejection(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc(tokenPath, func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(tokenSuccess("tok-1"))
 	})
-	mux.HandleFunc(sendPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(otpPath, func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "no valid numbers found", "result": map[string]any{}})
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
 	client := NewClient(Config{BaseURL: server.URL, Username: "u", Password: "p", SenderID: "s"}, server.Client())
-	_, err := client.SendSingle("962790000001", "hi")
+	_, err := client.SendOtp("962790000001", "hi")
 	if err == nil || !strings.Contains(err.Error(), "no valid numbers found") {
 		t.Fatalf("expected rejection error, got: %v", err)
 	}
@@ -167,7 +191,7 @@ func TestTokenGenerationFailure(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{BaseURL: server.URL, Username: "u", Password: "wrong", SenderID: "s"}, server.Client())
-	if _, err := client.SendSingle("962790000001", "hi"); err == nil {
+	if _, err := client.SendOtp("962790000001", "hi"); err == nil {
 		t.Fatal("expected token generation error")
 	}
 }
